@@ -2,9 +2,11 @@
 
 AI-powered CCTV analysis that detects suspicious behaviour in real time and alerts shopkeepers via a live dashboard.
 
+## Screenshots
+
 <p align="center">
-  <img src="" width="45%" />
-  <img src="" width="45%" />
+  <img src="https://raw.githubusercontent.com/flowstxte/ShieldEye/refs/heads/main/ss1.png" width="45%" />
+  <img src="https://raw.githubusercontent.com/flowstxte/ShieldEye/refs/heads/main/ss2.png" width="45%" />
 </p>
 
 ---
