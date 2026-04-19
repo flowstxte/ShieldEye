@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ShieldEye</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="brand">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+        <path d="M10 1L18 5V10C18 14.4 14.4 18.4 10 19.5C5.6 18.4 2 14.4 2 10V5L10 1Z"
+              stroke="var(--accent)" stroke-width="1.4" fill="none"/>
+        <circle cx="10" cy="10" r="2.5" fill="var(--accent)"/>
+      </svg>
+      <span class="brand-name">SHIELD<span class="accent">EYE</span></span>
+    </div>
+
+    <div class="topbar-center">
+      <div class="pill" id="pill-persons">
+        <span class="pill-dot" id="live-dot"></span>
+        <span id="stat-persons-val">0</span>
+        <span class="pill-label">persons</span>
+      </div>
+      <div class="pill">
+        <span id="stat-fps">—</span>
+        <span class="pill-label">fps</span>
+      </div>
+      <div class="pill warn" id="pill-alerts">
+        <span id="stat-alert-count">0</span>
+        <span class="pill-label">alerts</span>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <div class="clock" id="clock">00:00:00</div>
+      <div class="conn" id="conn-indicator">
+        <span class="conn-dot"></span>
+        <span id="conn-text">connecting</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+
+    <!-- LEFT: Video -->
+    <section class="feed-panel">
+      <div class="panel-header">
+        <span class="panel-title">LIVE FEED</span>
+        <span class="feed-status" id="feed-status">INITIALIZING</span>
+      </div>
+
+      <div class="video-wrap">
+        <!-- No signal state -->
+        <div class="no-signal" id="no-signal">
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+            <circle cx="18" cy="18" r="15" stroke="var(--muted)" stroke-width="1.2"/>
+            <line x1="18" y1="9" x2="18" y2="14" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="18" y1="22" x2="18" y2="27" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="9" y1="18" x2="14" y2="18" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="22" y1="18" x2="27" y2="18" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="18" cy="18" r="2" fill="var(--muted)"/>
+          </svg>
+          <p>Awaiting video feed</p>
+          <p class="sub">Backend must be running on port 8000</p>
+        </div>
+        <!-- Canvas renders on top once feed starts -->
+        <canvas id="video-canvas"></canvas>
+      </div>
+
+      <div class="det-bar" id="det-bar">
+        <span class="det-empty">No active detections</span>
+      </div>
+    </section>
+
+    <div class="resizer" id="drag-resizer"></div>
+
+    <!-- RIGHT: Alerts -->
+    <aside class="alert-panel">
+      <div class="panel-header">
+        <span class="panel-title">ALERT LOG</span>
+        <button class="clear-btn" id="clear-btn">Clear</button>
+      </div>
+
+      <div class="filter-row">
+        <button class="ftab active" data-filter="all">All</button>
+        <button class="ftab" data-filter="critical">Critical</button>
+        <button class="ftab" data-filter="high">High</button>
+        <button class="ftab" data-filter="medium">Medium</button>
+        <button class="ftab" data-filter="low">Low</button>
+      </div>
+
+      <div class="sev-row">
+        <div class="sev critical"><span id="cnt-critical">0</span><br>Critical</div>
+        <div class="sev high"><span id="cnt-high">0</span><br>High</div>
+        <div class="sev medium"><span id="cnt-medium">0</span><br>Medium</div>
+        <div class="sev low"><span id="cnt-low">0</span><br>Low</div>
+      </div>
+
+      <div class="alert-list" id="alert-list">
+        <div class="alert-empty" id="alert-empty">
+          <p>No alerts yet</p>
+          <p class="sub">Suspicious activity will appear here</p>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <div class="toast-wrap" id="toast-wrap"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
