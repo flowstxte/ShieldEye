@@ -184,4 +184,4 @@ Press `Ctrl+C` in the terminal. Then:
 deactivate
 ```
 
-#### Contributions are always welcome! gg :-)
+#### Contributions are always welcome! :-)
