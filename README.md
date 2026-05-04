@@ -5,8 +5,7 @@ AI-powered CCTV analysis that detects suspicious behaviour in real time and aler
 ## Screenshots
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/flowstxte/ShieldEye/refs/heads/main/ss1.png" width="45%" />
-  <img src="https://raw.githubusercontent.com/flowstxte/ShieldEye/refs/heads/main/ss2.png" width="45%" />
+  <img src="https://raw.githubusercontent.com/flowstxte/ShieldEye/refs/heads/main/ss.png" width="60%" />
 </p>
 
 ---
