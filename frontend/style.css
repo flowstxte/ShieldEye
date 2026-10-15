@@ -243,6 +243,7 @@ html, body {
   transform: translate(-50%, -50%);
   max-width: 100%;
   max-height: 100%;
+  object-fit: contain;
   display: block;
   z-index: 1;
 }
@@ -526,3 +527,65 @@ html, body {
 .toast.medium   { border-left: 4px solid var(--warn); }
 @keyframes tin  { from{opacity:0;transform:translateY(20px) scale(0.9)} to{opacity:1;transform:translateY(0) scale(1)} }
 @keyframes tout { from{opacity:1;transform:translateY(0) scale(1)} to{opacity:0;transform:translateY(-15px) scale(0.9)} }
+
+/* RESPONSIVE DESIGN */
+@media (max-width: 900px) {
+  html, body {
+    overflow-y: auto;
+    height: auto;
+    min-height: 100%;
+  }
+
+  .topbar {
+    height: auto;
+    padding: 12px 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .topbar-center {
+    order: 3;
+    width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .layout {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: calc(100vh - var(--topbar));
+  }
+
+  .resizer {
+    display: none;
+  }
+
+  .feed-panel {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .video-wrap {
+    min-height: 280px;
+    height: 48vw;
+    max-height: 500px;
+  }
+
+  .alert-panel {
+    border-left: none;
+    min-height: 450px;
+  }
+
+  .toast-wrap {
+    width: 90%;
+    max-width: 400px;
+  }
+
+  .toast {
+    white-space: normal;
+    padding: 12px 18px;
+    font-size: 13px;
+  }
+}

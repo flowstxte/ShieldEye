@@ -29,18 +29,30 @@ class CameraStream:
         if self._running:
             return
 
-        self._cap = cv2.VideoCapture(self._source)
+        self._source = self._resolve_source()
+
+        # Open video source (use DirectShow on Windows for webcam index to avoid lag)
+        if isinstance(self._source, int) and os.name == "nt":
+            self._cap = cv2.VideoCapture(self._source, cv2.CAP_DSHOW)
+            if not self._cap.isOpened():
+                self._cap = cv2.VideoCapture(self._source)
+        else:
+            self._cap = cv2.VideoCapture(self._source)
 
         if not self._cap.isOpened():
             print(f"[Camera] Could not open '{self._source}'. Trying webcam 0...")
-            self._cap = cv2.VideoCapture(0)
+            if os.name == "nt":
+                self._cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            if not self._cap or not self._cap.isOpened():
+                self._cap = cv2.VideoCapture(0)
 
         if not self._cap.isOpened():
             raise RuntimeError("[Camera] FATAL: No video source available.")
 
-        w          = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h          = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self._fps  = self._cap.get(cv2.CAP_PROP_FPS) or 25.0
+        w   = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h   = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = self._cap.get(cv2.CAP_PROP_FPS)
+        self._fps = float(fps) if (fps and fps > 0 and str(fps) != "nan") else 25.0
         print(f"[Camera] Opened: {self._source}  {w}x{h} @ {self._fps:.1f} FPS")
 
         self._running = True
@@ -60,6 +72,7 @@ class CameraStream:
             return None if self._frame is None else self._frame.copy()
 
     def _resolve_source(self):
+        load_dotenv(_PROJECT_ROOT / ".env", override=True)
         env_val = os.getenv("VIDEO_SOURCE", "").strip()
 
         if env_val:
@@ -67,6 +80,11 @@ class CameraStream:
             if env_val.isdigit():
                 print(f"[Camera] Source: webcam index {env_val}")
                 return int(env_val)
+
+            # Live streaming URL (RTSP / HTTP / HTTPS / RTMP)
+            if env_val.lower().startswith(("rtsp://", "rtsps://", "http://", "https://", "rtmp://")):
+                print(f"[Camera] Source: live stream {env_val}")
+                return env_val
 
             # Resolve relative paths from project root, not from CWD
             p = Path(env_val)
@@ -90,14 +108,23 @@ class CameraStream:
         return 0  # falls through to webcam attempt in start()
 
     def _loop(self):
-        interval = 1.0 / self._fps   # use cached fps — no syscall per frame
+        interval = max(1.0 / max(self._fps, 1.0), 0.01)
+        consecutive_failures = 0
         while self._running:
             ret, frame = self._cap.read()
             if not ret:
-                # End of file — loop back to start
-                self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                consecutive_failures += 1
+                # Video file loopback
+                if isinstance(self._source, str) and not self._source.lower().startswith(("rtsp://", "http://", "https://")):
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    if consecutive_failures > 5:
+                        # Re-open if seek fails on some codecs
+                        self._cap.release()
+                        self._cap = cv2.VideoCapture(self._source)
+                        consecutive_failures = 0
                 time.sleep(0.05)
                 continue
+            consecutive_failures = 0
             with self._lock:
                 self._frame = frame
             time.sleep(interval)

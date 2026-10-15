@@ -15,8 +15,8 @@ opencv-python==4.9.0.80
 # AI detection — 8.3+ required for PyTorch 2.6 compatibility
 ultralytics>=8.3.0
 
-# YOLO tracking dependency (ultralytics auto-installs but pin for reproducibility)
-lap>=0.5.12
+# YOLO tracking dependency (lapx provides prebuilt binary wheels for Windows/Linux/macOS)
+lapx>=0.5.2
 
-# NumPy — loosened pin, ultralytics 8.3+ supports numpy 1.x and 2.x
-numpy>=1.26.4
+# NumPy — pin <2 for opencv-python 4.9 ABI compatibility
+numpy>=1.26.4,<2.0.0

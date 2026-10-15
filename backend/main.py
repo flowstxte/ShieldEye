@@ -1,16 +1,22 @@
 import asyncio
 import base64
+import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
 
+# Ensure backend directory is in sys.path regardless of execution CWD
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
 import cv2
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+FRONTEND_DIR = _BACKEND_DIR.parent / "frontend"
 
 # Global references — set inside lifespan, not at import time
 alert_manager = None
@@ -58,7 +64,7 @@ app.add_middleware(
 
 async def broadcast(message: dict):
     dead = []
-    for ws in connected_clients:
+    for ws in list(connected_clients):
         try:
             await ws.send_json(message)
         except Exception:
@@ -80,6 +86,11 @@ async def serve_css():
 @app.get("/app.js")
 async def serve_js():
     return FileResponse(str(FRONTEND_DIR / "app.js"), media_type="application/javascript")
+
+@app.get("/favicon.ico")
+async def serve_favicon():
+    fav = FRONTEND_DIR / "favicon.ico"
+    return FileResponse(str(fav)) if fav.exists() else Response(status_code=204)
 
 
 # API routes
@@ -132,12 +143,19 @@ async def websocket_endpoint(websocket: WebSocket):
 
 async def video_processing_loop():
     print("[Engine] Starting video processing loop...")
-    try:
-        camera_stream.start()
-    except RuntimeError as e:
-        print(f"[Engine] {e}")
-        print("[Engine] Add test.mp4 to project root or set VIDEO_SOURCE in .env, then restart.")
-        return
+    while True:
+        try:
+            if not camera_stream.is_running:
+                camera_stream.start()
+            break
+        except RuntimeError as e:
+            print(f"[Engine] {e}")
+            print("[Engine] Add test.mp4 to project root or set VIDEO_SOURCE in .env (retrying in 5s)...")
+            await broadcast({
+                "type": "camera_error",
+                "message": "No video source available. Add test.mp4 to project root or set VIDEO_SOURCE in .env",
+            })
+            await asyncio.sleep(5)
 
     frame_count = 0
     fps_timer   = time.time()
@@ -146,10 +164,11 @@ async def video_processing_loop():
     while True:
         frame = camera_stream.read_frame()
         if frame is None:
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.04)
             continue
 
-        annotated, detections, new_alerts = detector.process_frame(frame)
+        # Offload CPU inference to worker thread so asyncio event loop stays responsive
+        annotated, detections, new_alerts = await asyncio.to_thread(detector.process_frame, frame)
 
         for alert in new_alerts:
             alert_manager.add(alert)
@@ -162,23 +181,24 @@ async def video_processing_loop():
             frame_count = 0
             fps_timer   = time.time()
 
-        _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
-        b64    = base64.b64encode(buf).decode("utf-8")
-
+        # Only encode and transmit frames when at least one client is viewing
         if connected_clients:
+            _, buf = await asyncio.to_thread(cv2.imencode, ".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            b64    = base64.b64encode(buf).decode("utf-8")
+
             payload: dict = {
                 "type":       "frame",
                 "data":       b64,
                 "detections": detections,
                 "timestamp":  time.time(),
             }
-            # Only include fps once it's been calculated (avoid sending 0)
             if fps > 0:
                 payload["fps"] = round(fps, 1)
             await broadcast(payload)
 
-        await asyncio.sleep(0.04)  # ~25 FPS target
+        await asyncio.sleep(0.02)  # Yield to event loop
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False, log_level="info")
+    

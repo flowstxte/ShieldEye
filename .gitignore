@@ -1,0 +1,21 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Test media & weights
+test.mp4
+*.mp4
+*.avi
+*.mkv
+!models/*.pt
+
+# OS files
+.DS_Store
+Thumbs.db

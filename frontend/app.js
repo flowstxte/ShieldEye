@@ -1,4 +1,5 @@
-const WS_URL   = `ws://${location.host}/ws`;
+const proto     = location.protocol === "https:" ? "wss:" : "ws:";
+const WS_URL    = `${proto}//${location.host}/ws`;
 const MAX_ALERTS = 100;
 
 // State
@@ -19,6 +20,7 @@ const connEl     = document.getElementById("conn-indicator");
 const connText   = document.getElementById("conn-text");
 const clockEl    = document.getElementById("clock");
 const liveDot    = document.getElementById("live-dot");
+const toastWrap  = document.getElementById("toast-wrap");
 
 // Clock
 function tickClock() {
@@ -51,6 +53,8 @@ function connect() {
 
   socket.onclose = () => {
     setConn("disconnected");
+    document.getElementById("stat-fps").textContent = "—";
+    document.getElementById("stat-persons-val").textContent = "0";
     setTimeout(connect, 3000);
   };
 
@@ -77,7 +81,17 @@ function handle(msg) {
       break;
 
     case "alert_history":
-      (msg.alerts || []).forEach(a => addAlert(a, false));
+      alerts = [];
+      counts = { critical: 0, high: 0, medium: 0, low: 0 };
+      for (const a of (msg.alerts || [])) {
+        if (!alerts.find(x => x.id === a.id)) {
+          alerts.push(a);
+          counts[a.severity] = (counts[a.severity] || 0) + 1;
+        }
+      }
+      document.getElementById("stat-alert-count").textContent = alerts.length;
+      renderAlerts();
+      renderCounts();
       break;
 
     case "alerts_cleared":
@@ -87,21 +101,45 @@ function handle(msg) {
       renderCounts();
       document.getElementById("stat-alert-count").textContent = "0";
       break;
+
+    case "camera_error":
+      const subMsg = noSignal.querySelector(".sub");
+      if (subMsg) subMsg.textContent = msg.message;
+      feedStatus.textContent = "NO SOURCE";
+      feedStatus.className   = "feed-status alert-state";
+      break;
   }
 }
 
-// Video rendering
+// Reusable Image buffer with frame queue to eliminate memory churn and frame jitter
+const frameImg = new Image();
+let isRendering = false;
+let pendingFrame = null;
+
+frameImg.onload = () => {
+  if (canvas.width !== frameImg.naturalWidth || canvas.height !== frameImg.naturalHeight) {
+    canvas.width  = frameImg.naturalWidth;
+    canvas.height = frameImg.naturalHeight;
+  }
+  ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
+  isRendering = false;
+
+  if (pendingFrame) {
+    const next = pendingFrame;
+    pendingFrame = null;
+    isRendering = true;
+    frameImg.src = next;
+  }
+};
+
 function drawFrame(b64) {
-  const img = new Image();
-  img.onload = () => {
-    // Only resize canvas buffer when dimensions actually change
-    if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
-      canvas.width  = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-    }
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  };
-  img.src = "data:image/jpeg;base64," + b64;
+  const src = "data:image/jpeg;base64," + b64;
+  if (isRendering) {
+    pendingFrame = src;
+  } else {
+    isRendering = true;
+    frameImg.src = src;
+  }
 }
 
 // Detection bar + feed status badge
@@ -133,11 +171,20 @@ function updateDet(dets) {
 function addAlert(a, isNew) {
   if (alerts.find(x => x.id === a.id)) return;  // deduplicate
   alerts.unshift(a);
-  if (alerts.length > MAX_ALERTS) alerts.pop();
+  if (alerts.length > MAX_ALERTS) {
+    const dropped = alerts.pop();
+    if (dropped && counts[dropped.severity] > 0) {
+      counts[dropped.severity]--;
+    }
+  }
   counts[a.severity] = (counts[a.severity] || 0) + 1;
   document.getElementById("stat-alert-count").textContent = alerts.length;
   renderAlerts(isNew ? a.id : null);
   renderCounts();
+
+  if (isNew && (a.severity === "critical" || a.severity === "high")) {
+    showToast(a);
+  }
 }
 
 function renderAlerts(flashId) {
@@ -190,6 +237,24 @@ function renderCounts() {
   document.getElementById("cnt-low").textContent      = counts.low      || 0;
 }
 
+// Toast notification popups
+function showToast(alert) {
+  if (!toastWrap) return;
+  const ICONS = { critical: "🚨", high: "🔶", medium: "⚠️", low: "ℹ️" };
+  const toast = document.createElement("div");
+  toast.className = `toast ${alert.severity}`;
+  toast.innerHTML = `
+    <span>${ICONS[alert.severity] || "📋"}</span>
+    <div>
+      <strong>${esc(alert.title)}</strong> — ${esc(alert.detail)}
+    </div>
+  `;
+  toastWrap.appendChild(toast);
+  setTimeout(() => {
+    if (toast.parentNode) toast.parentNode.removeChild(toast);
+  }, 4300);
+}
+
 // Filter tabs
 document.querySelectorAll(".ftab").forEach(btn => {
   btn.addEventListener("click", () => {
@@ -203,7 +268,7 @@ document.querySelectorAll(".ftab").forEach(btn => {
 // Clear alerts
 document.getElementById("clear-btn").addEventListener("click", async () => {
   try {
-    await fetch(`http://${location.host}/api/alerts/clear`, { method: "POST" });
+    await fetch("/api/alerts/clear", { method: "POST" });
   } catch {
     // Fallback if API unreachable — clear locally
     alerts = [];
@@ -229,38 +294,33 @@ function esc(s) {
 
 connect();
 
-// --- Resizable Panel Logic ---
+// --- Resizable Panel Logic (Pointer Events for Mouse, Stylus & Touch) ---
 const resizer = document.getElementById('drag-resizer');
 let isResizing = false;
 
-// When the user clicks down on the handle
-resizer.addEventListener('mousedown', (e) => {
+resizer.addEventListener('pointerdown', (e) => {
   isResizing = true;
   resizer.classList.add('dragging');
-  // Prevent text from highlighting while dragging
+  resizer.setPointerCapture(e.pointerId);
   document.body.style.userSelect = 'none'; 
 });
 
-// When the user moves the mouse anywhere on the screen
-document.addEventListener('mousemove', (e) => {
+resizer.addEventListener('pointermove', (e) => {
   if (!isResizing) return;
-  
-  // Calculate new width: Total window width minus mouse X position
   let newWidth = window.innerWidth - e.clientX;
-  
-  // Set boundaries so the panel doesn't completely disappear or take over the screen
   if (newWidth < 280) newWidth = 280; // Minimum width
   if (newWidth > 800) newWidth = 800; // Maximum width
-  
-  // Update the CSS variable in real-time
   document.documentElement.style.setProperty('--panel-width', `${newWidth}px`);
 });
 
-// When the user lets go of the mouse button
-document.addEventListener('mouseup', () => {
+const stopResize = (e) => {
   if (isResizing) {
     isResizing = false;
     resizer.classList.remove('dragging');
-    document.body.style.userSelect = ''; // Restore text selection
+    try { resizer.releasePointerCapture(e.pointerId); } catch {}
+    document.body.style.userSelect = '';
   }
-});
+};
+
+resizer.addEventListener('pointerup', stopResize);
+resizer.addEventListener('pointercancel', stopResize);

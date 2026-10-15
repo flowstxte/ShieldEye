@@ -167,8 +167,8 @@ If you have a GPU, add `self.model.to("cuda")` in `detection.py` after the YOLO(
 
 ```python
 LOITER_SECONDS    = 8      # Seconds before loitering alert (lower = more sensitive)
-ERRATIC_THRESHOLD = 4      # Direction changes to flag erratic movement
-CROUCH_RATIO      = 0.55   # bbox h/w ratio for crouching detection
+ERRATIC_THRESHOLD = 3      # Significant direction reversals to flag erratic movement
+CROUCH_RATIO      = 1.15   # bbox h/w ratio for crouching detection (standing person is ~2.5-3.5)
 COOLDOWN_SECONDS  = 8      # Seconds between same alerts for same person
 CONFIDENCE_THRESH = 0.45   # Min YOLO confidence (raise to reduce false positives)
 ```

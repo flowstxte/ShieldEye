@@ -19,13 +19,14 @@ MODEL_NAME  = "yolov8n.pt"   # Change to yolov8s.pt / yolov8m.pt etc. for better
 MODEL_PATH  = MODELS_DIR / MODEL_NAME
 
 # Tunable constants
-LOITER_SECONDS    = 8      # Seconds stationary before loitering alert
-ERRATIC_THRESHOLD = 4      # Direction changes in last 10 frames to flag erratic movement
-CROUCH_RATIO      = 0.55   # bbox h/w below this = possible crouching/concealing
-HOVER_ZONE_FRAMES = 25     # Frames near shelf edge before alert
-CONFIDENCE_THRESH = 0.45   # Min YOLO confidence
-HISTORY_LEN       = 60     # Frames of trajectory history per track
-COOLDOWN_SECONDS  = 8      # Min seconds between same alert type for same person
+LOITER_SECONDS     = 8      # Seconds stationary before loitering alert
+ERRATIC_THRESHOLD  = 3      # Significant direction reversals to flag erratic movement
+CROUCH_RATIO       = 1.15   # bbox h/w below this = crouching/concealing (standing person is ~2.5-3.5)
+HOVER_ZONE_FRAMES  = 25     # Frames near shelf edge before alert
+CONFIDENCE_THRESH  = 0.45   # Min YOLO confidence
+HISTORY_LEN        = 60     # Frames of trajectory history per track
+COOLDOWN_SECONDS   = 8      # Min seconds between same alert type for same person
+MAX_MISSING_FRAMES = 25     # Tolerated missing frames (~1s) before track pruning
 
 # BGR colour palette
 COLOR_NORMAL  = (0, 220, 130)
@@ -50,11 +51,28 @@ class TrackState:
         self.color             = COLOR_NORMAL
         self.hover_counter     = 0
         self.last_alert_time: Dict[str, float] = {}
+        self.stationary_pos: Tuple[int, int]   = None
+        self.stationary_start: float           = None
+        self.missing_frames: int               = 0
 
     def add(self, cx: int, cy: int, bbox: Tuple, ts: float):
         self.positions.append((cx, cy))
         self.timestamps.append(ts)
         self.bboxes.append(bbox)
+        self.missing_frames = 0
+
+        # Stationary tracking for loitering
+        if self.stationary_pos is None:
+            self.stationary_pos   = (cx, cy)
+            self.stationary_start = ts
+        else:
+            dx = cx - self.stationary_pos[0]
+            dy = cy - self.stationary_pos[1]
+            dist = (dx * dx + dy * dy) ** 0.5
+            if dist > 80:
+                # Moved away from anchor area; reset stationary anchor
+                self.stationary_pos   = (cx, cy)
+                self.stationary_start = ts
 
     def can_alert(self, alert_type: str) -> bool:
         return (time.time() - self.last_alert_time.get(alert_type, 0)) > COOLDOWN_SECONDS
@@ -126,7 +144,7 @@ class ShopDetector:
             for i, box in enumerate(results[0].boxes):
                 x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                 conf     = float(box.conf[0])
-                track_id = int(box.id[0]) if box.id is not None else i
+                track_id = int(box.id[0]) if (box.id is not None and getattr(box.id, "numel", lambda: 1)() > 0) else i
 
                 active_ids.add(track_id)
                 cx = (x1 + x2) // 2
@@ -137,7 +155,7 @@ class ShopDetector:
                 state = self.tracks[track_id]
                 state.add(cx, cy, (x1, y1, x2, y2), now)
 
-                alerts = self._analyse(state, (x1, y1, x2, y2), frame.shape)
+                alerts = self._analyse(state, (x1, y1, x2, y2), frame.shape, now)
                 triggered_alerts.extend(alerts)
 
                 self._draw_person(annotated, state, x1, y1, x2, y2, conf)
@@ -150,14 +168,17 @@ class ShopDetector:
                     "label":      state.label,
                 })
 
-        # Prune tracks that disappeared this frame
-        for tid in [t for t in self.tracks if t not in active_ids]:
-            del self.tracks[tid]
+        # Graceful track pruning: allow brief occlusions/flickers without wiping state
+        for tid in list(self.tracks.keys()):
+            if tid not in active_ids:
+                self.tracks[tid].missing_frames += 1
+                if self.tracks[tid].missing_frames > MAX_MISSING_FRAMES:
+                    del self.tracks[tid]
 
         self._draw_hud(annotated, len(active_ids))
         return annotated, detections, triggered_alerts
 
-    def _analyse(self, state: TrackState, bbox: Tuple, frame_shape: Tuple) -> List[dict]:
+    def _analyse(self, state: TrackState, bbox: Tuple, frame_shape: Tuple, now: float) -> List[dict]:
         alerts    = []
         positions = list(state.positions)
         timestamps = list(state.timestamps)
@@ -169,17 +190,13 @@ class ShopDetector:
         h, w = frame_shape[:2]
         bh = y2 - y1
         bw = x2 - x1
+        flag_active = False
 
-        # 1. Loitering
-        if len(positions) >= 20:
-            recent   = positions[-30:] if len(positions) >= 30 else positions
-            xs       = [p[0] for p in recent]
-            ys       = [p[1] for p in recent]
-            spread   = max(max(xs) - min(xs), max(ys) - min(ys))
-            n        = len(timestamps)
-            duration = timestamps[-1] - timestamps[max(0, n - 30)]
-
-            if spread < 80 and duration >= LOITER_SECONDS:
+        # 1. Loitering (accurate wall-clock elapsed duration)
+        if state.stationary_start is not None and len(positions) >= 10:
+            duration = now - state.stationary_start
+            if duration >= LOITER_SECONDS:
+                flag_active = True
                 state.suspicion = min(state.suspicion + 0.02, 1.0)
                 state.label     = "Loitering"
                 state.color     = COLOR_SUSPECT
@@ -193,6 +210,7 @@ class ShopDetector:
 
         # 2. Crouching / Concealing
         if bh > 0 and bw > 0 and (bh / bw) < CROUCH_RATIO and bh > 40:
+            flag_active = True
             state.suspicion = min(state.suspicion + 0.03, 1.0)
             state.label     = "Crouching"
             state.color     = COLOR_SUSPECT
@@ -204,18 +222,29 @@ class ShopDetector:
                     state, "high",
                 ))
 
-        # 3. Erratic / Evasive movement
+        # 3. Erratic / Evasive movement (deadband filtering for significant reversals)
         if len(positions) >= 10:
             recent_pos = positions[-10:]
-            dirs = []
+            steps = []
             for i in range(1, len(recent_pos)):
                 dx = recent_pos[i][0] - recent_pos[i-1][0]
                 dy = recent_pos[i][1] - recent_pos[i-1][1]
-                if abs(dx) + abs(dy) > 5:
-                    dirs.append((dx > 0, dy > 0))
-            if len(dirs) > 1:
-                changes = sum(1 for i in range(1, len(dirs)) if dirs[i] != dirs[i-1])
-                if changes >= ERRATIC_THRESHOLD:
+                sx = 1 if dx >= 6 else (-1 if dx <= -6 else 0)
+                sy = 1 if dy >= 6 else (-1 if dy <= -6 else 0)
+                if sx != 0 or sy != 0:
+                    steps.append((sx, sy))
+
+            if len(steps) >= 4:
+                reversals = 0
+                for i in range(1, len(steps)):
+                    prev_sx, prev_sy = steps[i-1]
+                    curr_sx, curr_sy = steps[i]
+                    if (prev_sx != 0 and curr_sx != 0 and prev_sx != curr_sx) or \
+                       (prev_sy != 0 and curr_sy != 0 and prev_sy != curr_sy):
+                        reversals += 1
+
+                if reversals >= ERRATIC_THRESHOLD:
+                    flag_active = True
                     state.suspicion = min(state.suspicion + 0.025, 1.0)
                     state.label     = "Erratic Movement"
                     state.color     = COLOR_SUSPECT
@@ -232,11 +261,11 @@ class ShopDetector:
         state.hover_counter = (state.hover_counter + 1) if near_edge else max(0, state.hover_counter - 1)
 
         if state.hover_counter >= HOVER_ZONE_FRAMES:
+            flag_active = True
             state.suspicion = min(state.suspicion + 0.015, 1.0)
             if state.label == "Tracking":
                 state.label = "Near Shelves"
                 state.color = COLOR_SUSPECT
-            # use cooldown instead of exact frame count so alert can re-fire
             if state.can_alert("hover"):
                 state.record_alert("hover")
                 alerts.append(self._make_alert(
@@ -247,6 +276,7 @@ class ShopDetector:
 
         # 5. High suspicion composite
         if state.suspicion >= 0.75:
+            flag_active = True
             state.color = COLOR_ALERT
             state.label = "HIGH RISK"
             if state.can_alert("high_risk"):
@@ -257,10 +287,9 @@ class ShopDetector:
                     state, "critical",
                 ))
 
-        # Decay suspicion when no flags triggered this frame
-        if not alerts:
+        # Decay suspicion only when NO suspicious behavior flag was active this frame
+        if not flag_active:
             state.suspicion = max(0.0, state.suspicion - 0.002)
-            # Only reset label if suspicion is genuinely low
             if state.suspicion < 0.2:
                 state.label = "Tracking"
                 state.color = COLOR_NORMAL
@@ -338,3 +367,4 @@ class ShopDetector:
             "timestamp":       time.time(),
             "time_str":        time.strftime("%H:%M:%S"),
         }
+    
